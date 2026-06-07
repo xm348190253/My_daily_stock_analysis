@@ -160,6 +160,8 @@ class AnalyzerNewsPromptTestCase(unittest.TestCase):
                 "earnings": {
                     "data": {
                         "financial_report": {"report_date": "2025-12-31", "revenue": 1000},
+                        "forecast_summary": "预计净利润同比增长",
+                        "quick_report_summary": "业绩快报显示营收改善",
                         "dividend": {"ttm_cash_dividend_per_share": 1.2, "ttm_dividend_yield_pct": 2.4},
                     }
                 }
@@ -177,6 +179,10 @@ class AnalyzerNewsPromptTestCase(unittest.TestCase):
         self.assertIn("超出近7日窗口的新闻一律忽略", prompt)
         self.assertIn("时间未知、无法确定发布日期的新闻一律忽略", prompt)
         self.assertIn("财报与分红（价值投资口径）", prompt)
+        self.assertIn("业绩预告", prompt)
+        self.assertIn("预计净利润同比增长", prompt)
+        self.assertIn("业绩快报", prompt)
+        self.assertIn("业绩快报显示营收改善", prompt)
         self.assertIn("禁止编造", prompt)
 
     def test_prompt_includes_capital_flow_as_operation_filter(self) -> None:

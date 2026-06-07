@@ -279,16 +279,25 @@ class TushareFetcher(BaseFetcher):
             return self.date_list
 
         start_date = (china_now - timedelta(days=20)).strftime("%Y%m%d")
-        df_cal = self._call_api_with_rate_limit(
-            "trade_cal",
-            exchange="SSE",
-            start_date=start_date,
-            end_date=requested_end_date,
-        )
+        try:
+            df_cal = self._call_api_with_rate_limit(
+                "trade_cal",
+                exchange="SSE",
+                start_date=start_date,
+                end_date=requested_end_date,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[Tushare] trade_cal 获取失败，使用本地工作日兜底选择最近交易日: %s",
+                exc,
+            )
+            self.date_list = self._estimate_recent_trade_dates(requested_end_date, china_now)
+            self._date_list_end = requested_end_date
+            return self.date_list
 
         if df_cal is None or df_cal.empty or "cal_date" not in df_cal.columns:
             logger.warning("[Tushare] trade_cal 返回为空，无法更新交易日历缓存")
-            self.date_list = []
+            self.date_list = self._estimate_recent_trade_dates(requested_end_date, china_now)
             self._date_list_end = requested_end_date
             return self.date_list
 
@@ -298,6 +307,23 @@ class TushareFetcher(BaseFetcher):
         )
         self.date_list = trade_dates
         self._date_list_end = requested_end_date
+        return trade_dates
+
+    @staticmethod
+    def _estimate_recent_trade_dates(end_date: str, china_now: datetime) -> List[str]:
+        """Estimate recent A-share trading dates when Tushare trade_cal is rate-limited."""
+        try:
+            cursor = datetime.strptime(end_date, "%Y%m%d")
+        except ValueError:
+            cursor = china_now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        trade_dates: List[str] = []
+        for offset in range(0, 30):
+            day = cursor - timedelta(days=offset)
+            if day.weekday() < 5:
+                trade_dates.append(day.strftime("%Y%m%d"))
+            if len(trade_dates) >= 20:
+                break
         return trade_dates
 
     @staticmethod

@@ -18,6 +18,7 @@ from data_provider.fundamental_adapter import (
     _build_dividend_payload,
     _extract_latest_row,
     _parse_dividend_plan_to_per_share,
+    _recent_report_dates,
 )
 
 
@@ -91,8 +92,8 @@ class TestFundamentalAdapter(unittest.TestCase):
                 "净利润同比": [9.5],
             }
         )
-        forecast_df = pd.DataFrame({"股票代码": ["600519"], "预告": ["预增"]})
-        quick_df = pd.DataFrame({"股票代码": ["600519"], "快报": ["快报摘要"]})
+        forecast_row = pd.Series({"股票代码": "600519", "预告": "预增"})
+        quick_row = pd.Series({"股票代码": "600519", "快报": "快报摘要"})
         dividend_df = pd.DataFrame(
             {
                 "股票代码": ["600519", "600519", "600519", "600519"],
@@ -106,11 +107,16 @@ class TestFundamentalAdapter(unittest.TestCase):
             "_call_df_candidates",
             side_effect=[
                 (fin_df, "stock_financial_abstract", []),
-                (forecast_df, "stock_yjyg_em", []),
-                (quick_df, "stock_yjkb_em", []),
                 (dividend_df, "stock_fhps_detail_em", []),
                 (None, None, []),
                 (None, None, []),
+            ],
+        ), patch.object(
+            adapter,
+            "_call_row_candidates",
+            side_effect=[
+                (forecast_row, "stock_yjyg_em", []),
+                (quick_row, "stock_yjkb_em", []),
             ],
         ):
             result = adapter.get_fundamental_bundle("600519")
@@ -127,6 +133,37 @@ class TestFundamentalAdapter(unittest.TestCase):
         self.assertEqual(len(events), 2)  # duplicate + future day filtered
         self.assertEqual(dividend_payload.get("ttm_event_count"), 1)
         self.assertAlmostEqual(dividend_payload.get("ttm_cash_dividend_per_share"), 0.3, places=6)
+        self.assertEqual(result["earnings"].get("forecast_summary"), "预增")
+        self.assertEqual(result["earnings"].get("quick_report_summary"), "快报摘要")
+
+    def test_call_row_candidates_uses_date_candidates_until_stock_matches(self) -> None:
+        adapter = AkshareFundamentalAdapter()
+        calls = []
+        first_df = pd.DataFrame({"股票代码": ["000001"], "预告": ["其他股票"]})
+        second_df = pd.DataFrame({"股票代码": ["600519"], "预告": ["预增"]})
+
+        def fake_stock_yjyg_em(**kwargs):
+            calls.append(kwargs)
+            return first_df if len(calls) == 1 else second_df
+
+        with patch.dict("sys.modules", {"akshare": type("FakeAk", (), {"stock_yjyg_em": fake_stock_yjyg_em})}):
+            row, source, errors = adapter._call_row_candidates(
+                "600519",
+                [
+                    ("stock_yjyg_em", {"date": "20260331"}),
+                    ("stock_yjyg_em", {"date": "20251231"}),
+                ],
+            )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(source, "stock_yjyg_em")
+        self.assertIsNotNone(row)
+        self.assertEqual(row["预告"], "预增")
+        self.assertEqual(calls, [{"date": "20260331"}, {"date": "20251231"}])
+
+    def test_recent_report_dates_excludes_future_quarter(self) -> None:
+        dates = _recent_report_dates(datetime(2026, 6, 7), quarters=3)
+        self.assertEqual(dates, ["20260331", "20251231", "20250930"])
 
     def test_build_dividend_payload_returns_empty_when_code_not_matched(self) -> None:
         now = datetime.now().strftime("%Y-%m-%d")

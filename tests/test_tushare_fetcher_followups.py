@@ -103,6 +103,21 @@ class TestTushareFetcherFollowUps(unittest.TestCase):
 
         # Data not ready, should fall back to Thursday (19th)
         self.assertEqual(result, "20260319")
+
+    def test_get_trade_time_uses_weekday_fallback_when_trade_calendar_is_limited(self) -> None:
+        fetcher = self._make_fetcher()
+        fetcher._api.trade_cal.side_effect = Exception("trade_cal frequency limit")
+
+        with patch.object(
+            fetcher,
+            "_get_china_now",
+            side_effect=[datetime(2026, 3, 20, 20, 0), datetime(2026, 3, 20, 20, 0)],
+        ), patch.object(fetcher, "_check_rate_limit") as rate_limit_mock:
+            result = fetcher.get_trade_time(early_time="00:00", late_time="19:00")
+
+        self.assertEqual(result, "20260320")
+        self.assertEqual(fetcher._api.trade_cal.call_count, 1)
+        self.assertEqual(rate_limit_mock.call_count, 1)
         
           
     def test_get_sector_rankings_rate_limits_calendar_and_rankings_api(self) -> None:

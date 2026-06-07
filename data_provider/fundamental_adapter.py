@@ -165,6 +165,23 @@ def _normalize_report_date(value: Any) -> Optional[str]:
     return parsed.date().isoformat() if parsed else None
 
 
+def _recent_report_dates(now: Optional[datetime] = None, quarters: int = 8) -> List[str]:
+    """Return recent completed quarter-end dates in AkShare's YYYYMMDD format."""
+    ref = now or datetime.now()
+    quarter_ends = ((3, 31), (6, 30), (9, 30), (12, 31))
+    dates: List[str] = []
+    year = ref.year
+    while len(dates) < max(1, quarters):
+        for month, day in reversed(quarter_ends):
+            candidate = datetime(year, month, day)
+            if candidate.date() <= ref.date():
+                dates.append(candidate.strftime("%Y%m%d"))
+                if len(dates) >= max(1, quarters):
+                    break
+        year -= 1
+    return dates
+
+
 def _build_dividend_payload(
     dividend_df: pd.DataFrame,
     stock_code: str,
@@ -289,6 +306,36 @@ class AkshareFundamentalAdapter:
                 continue
         return None, None, errors
 
+    def _call_row_candidates(
+        self,
+        stock_code: str,
+        candidates: List[Tuple[str, Dict[str, Any]]],
+    ) -> Tuple[Optional[pd.Series], Optional[str], List[str]]:
+        """Call dataframe candidates and keep trying until the current stock is found."""
+        errors: List[str] = []
+        try:
+            import akshare as ak
+        except Exception as exc:
+            return None, None, [f"import_akshare:{type(exc).__name__}"]
+
+        for func_name, kwargs in candidates:
+            fn = getattr(ak, func_name, None)
+            if fn is None:
+                continue
+            try:
+                df = fn(**kwargs)
+                if isinstance(df, pd.Series):
+                    df = df.to_frame().T
+                if not isinstance(df, pd.DataFrame) or df.empty:
+                    continue
+                row = _extract_latest_row(df, stock_code)
+                if row is not None:
+                    return row, func_name, errors
+            except Exception as exc:
+                errors.append(f"{func_name}:{type(exc).__name__}")
+                continue
+        return None, None, errors
+
     def get_fundamental_bundle(self, stock_code: str) -> Dict[str, Any]:
         """
         Return normalized fundamental blocks from AkShare with partial tolerance.
@@ -339,35 +386,37 @@ class AkshareFundamentalAdapter:
                     result["earnings"]["financial_report"] = financial_report_payload
                 result["source_chain"].append(f"growth:{fin_source}")
 
-        # Earnings forecast
-        forecast_df, forecast_source, forecast_errors = self._call_df_candidates([
-            ("stock_yjyg_em", {"symbol": stock_code}),
-            ("stock_yjyg_em", {}),
-            ("stock_yjbb_em", {"symbol": stock_code}),
-            ("stock_yjbb_em", {}),
-        ])
+        # Earnings forecast. AkShare's EM endpoints are date-scoped, not symbol-scoped.
+        report_dates = _recent_report_dates()
+        forecast_candidates = [
+            ("stock_yjyg_em", {"date": date})
+            for date in report_dates
+        ] + [
+            ("stock_yjbb_em", {"date": date})
+            for date in report_dates
+        ]
+        forecast_row, forecast_source, forecast_errors = self._call_row_candidates(
+            stock_code,
+            forecast_candidates,
+        )
         result["errors"].extend(forecast_errors)
-        if forecast_df is not None:
-            row = _extract_latest_row(forecast_df, stock_code)
-            if row is not None:
-                result["earnings"]["forecast_summary"] = _safe_str(
-                    _pick_by_keywords(row, ["预告", "业绩变动", "内容", "摘要", "公告"])
-                )[:200]
-                result["source_chain"].append(f"earnings_forecast:{forecast_source}")
+        if forecast_row is not None:
+            result["earnings"]["forecast_summary"] = _safe_str(
+                _pick_by_keywords(forecast_row, ["预告", "业绩变动", "内容", "摘要", "公告"])
+            )[:200]
+            result["source_chain"].append(f"earnings_forecast:{forecast_source}")
 
         # Earnings quick report
-        quick_df, quick_source, quick_errors = self._call_df_candidates([
-            ("stock_yjkb_em", {"symbol": stock_code}),
-            ("stock_yjkb_em", {}),
-        ])
+        quick_row, quick_source, quick_errors = self._call_row_candidates(
+            stock_code,
+            [("stock_yjkb_em", {"date": date}) for date in report_dates],
+        )
         result["errors"].extend(quick_errors)
-        if quick_df is not None:
-            row = _extract_latest_row(quick_df, stock_code)
-            if row is not None:
-                result["earnings"]["quick_report_summary"] = _safe_str(
-                    _pick_by_keywords(row, ["快报", "摘要", "公告", "说明"])
-                )[:200]
-                result["source_chain"].append(f"earnings_quick:{quick_source}")
+        if quick_row is not None:
+            result["earnings"]["quick_report_summary"] = _safe_str(
+                _pick_by_keywords(quick_row, ["快报", "摘要", "公告", "说明"])
+            )[:200]
+            result["source_chain"].append(f"earnings_quick:{quick_source}")
 
         # Dividend details (cash dividend, pre-tax)
         dividend_df, dividend_source, dividend_errors = self._call_df_candidates([

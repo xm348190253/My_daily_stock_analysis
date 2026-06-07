@@ -3005,6 +3005,16 @@ class GeminiAnalyzer:
             if isinstance(earnings_data, dict)
             else {}
         )
+        forecast_summary = (
+            earnings_data.get("forecast_summary", "")
+            if isinstance(earnings_data, dict)
+            else ""
+        )
+        quick_report_summary = (
+            earnings_data.get("quick_report_summary", "")
+            if isinstance(earnings_data, dict)
+            else ""
+        )
         if isinstance(financial_report, dict) or isinstance(dividend_metrics, dict):
             financial_report = financial_report if isinstance(financial_report, dict) else {}
             dividend_metrics = dividend_metrics if isinstance(dividend_metrics, dict) else {}
@@ -3021,6 +3031,8 @@ class GeminiAnalyzer:
 | 归母净利润 | {financial_report.get('net_profit_parent', 'N/A')} | |
 | 经营现金流 | {financial_report.get('operating_cash_flow', 'N/A')} | |
 | ROE | {financial_report.get('roe', 'N/A')} | |
+| 业绩预告 | {forecast_summary or 'N/A'} | 来自结构化业绩预告字段 |
+| 业绩快报 | {quick_report_summary or 'N/A'} | 来自结构化业绩快报字段 |
 | 近12个月每股现金分红 | {ttm_cash} | 仅现金分红、税前口径 |
 | TTM 股息率 | {ttm_yield} | 公式：近12个月每股现金分红 / 当前价格 × 100% |
 | TTM 分红事件数 | {ttm_count} | |
